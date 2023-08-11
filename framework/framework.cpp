@@ -1,6 +1,7 @@
 #include "framework.h"
 #include <iostream>
 #include <fstream>
+#include <filesystem>
 #define VMA_IMPLEMENTATION
 #define VMA_VULKAN_VERSION 1003000 // Vulkan 1.3
 #include <vma/vk_mem_alloc.h>
@@ -59,11 +60,13 @@ namespace Framework
 	}
 #endif
 
-	std::vector<uint32_t> loadShader(const char* path)
+	std::vector<uint32_t> loadShader(const char* fileName)
 	{
-		std::ifstream infile(path, std::ios::binary | std::ios::ate);
-		if (!infile.good())
-			throw std::runtime_error("Unable to open shader file \"" + std::string(path) + "\"");
+		// Construct path and corresponding filestream
+		std::filesystem::path filePath = std::filesystem::current_path().parent_path() / fileName;
+		std::ifstream infile(filePath, std::ios::binary | std::ios::ate);
+
+		if (!infile.good()) { throw std::runtime_error("Unable to open shader file \"" + filePath.generic_string() + "\""); }
 		std::streamsize size = infile.tellg();
 		std::vector<uint32_t> buffer((size + 3) / 4);
 		infile.seekg(std::ios::beg);
@@ -76,38 +79,62 @@ namespace Framework
 		const std::vector<const char*>& extensions_device, vk::UniqueInstance& instance, vk::PhysicalDevice& physicalDevice, vk::UniqueDevice& device, vk::Queue& queue, vk::UniqueCommandPool& pool)
 	{
 		// TODO: remove this
-		throw NotImplemented(__FUNCTION__);
+		// throw NotImplemented(__FUNCTION__);
 
 		// TODO: Create a unique instance. For that, prepare an app info with the given name and API version.
 		// It should enable all extensions provided in extensions_instance. Store it in the provided output 
 		// parameter.
-		// 
+		const vk::ApplicationInfo applicationInfo(app_name, 1, "None", 1, api_version, nullptr);
+		instance = vk::createInstanceUnique(vk::InstanceCreateInfo(
+			{}, &applicationInfo,
+			0, nullptr,
+			extensions_instance.size(), extensions_instance.data()));
+
 		// TODO: Select a physical device. It should be a device that supports AT LEAST the given API version.
 		// Furthermore, it should have at least one queue family that supports both COMPUTE and TRANSFER.
 		// For each physical device, go through its collection of queue family properties. If the properties
 		// of a particular queue family have the queue flags for COMPUTE and TRANSFER set, keep the index of
 		// this queue family for later and store that physical device. The check can be done like this:
-		// 
-		// vk::QueueFamilyProperties props = physicalDeviceQueueFamilyProps[i];
-		// if ((props.queueFlags & vk::QueueFlagBits::eCompute) && (props.queueFlags & vk::QueueFlagBits::eTransfer))
-		// { 
-		//	   <remember the index i, it is your chosen queue family's identifier>
-		//	   <remember the physical device, it is the one that provides the queue family we want>
-		// }
-		// 
+		//
+		vk::PhysicalDevice chosenDevice;
+		size_t chosenQueueFamily;
+		bool familyFound = false;
+		for (const auto &device : instance->enumeratePhysicalDevices()) {
+			const auto queueFamProps = device.getQueueFamilyProperties();
+			for (size_t familyIdx = 0UL; familyIdx < queueFamProps.size(); familyIdx++) {
+				vk::QueueFamilyProperties props = queueFamProps[familyIdx];
+				if ((props.queueFlags & vk::QueueFlagBits::eCompute) && (props.queueFlags & vk::QueueFlagBits::eTransfer)) { 
+					chosenQueueFamily	= familyIdx;
+					chosenDevice 		= device;
+					familyFound			= true;
+					break;
+				}
+			}
+			if (familyFound) { break; }
+		}
+
 		// If no suitable physical device / queue is found, emit an error message. If you hit this error and
 		// you are sure you did everything correct, notify the lecturer and ask for help. Store the physical 
-		// device you selected in the output parameter physicalDevcie.
-		//
+		// device you selected in the output parameter physicalDevice.
+		if (!familyFound) { throw std::runtime_error("Could not find device with suitable queue family"); }
+		physicalDevice = chosenDevice;
+		
 		// TODO: Create a unique (logical) device from the physical device. The device should be created with 
 		// a single queue from the family you identified above. The queue priority should be 1.0. The device 
 		// should enable all extensions listed in extensions_device. Store the device in the provided output 
 		// parameter. Get its first queue and store it in the provided output parameter.
-		// 
+		constexpr float priority[] = { 1.0f };
+		const vk::DeviceQueueCreateInfo deviceQueueCreateInfo({}, chosenQueueFamily, 1, priority);
+		device	= physicalDevice.createDeviceUnique(vk::DeviceCreateInfo({}, deviceQueueCreateInfo, {}, extensions_device));
+		queue 	= device.get().getQueue(chosenQueueFamily, 0);
+
 		// TODO: Create a unique command pool. Use the queue family index you found above. Make sure that the
 		// buffers allocated from this command pool can be reset (i.e., recorded multiple times). This is 
 		// achieved by adding the vk::CommandPoolCreateFlagBits::eResetCommandBuffer flag to the create
 		// info. Store the created pool in the output parameter. 
+		pool = device->createCommandPoolUnique(vk::CommandPoolCreateInfo(
+			{ vk::CommandPoolCreateFlagBits::eResetCommandBuffer },
+			chosenQueueFamily));
 	}
 
 	VmaAllocator createAllocator(vk::Instance instance, uint32_t apiVersion, vk::PhysicalDevice physicalDevice, vk::Device device)
@@ -124,16 +151,20 @@ namespace Framework
 		vk::UniquePipelineCache& pipelineCache, vk::UniquePipeline& pipeline)
 	{
 		// TODO: remove this
-		throw NotImplemented(__FUNCTION__);
+		// throw NotImplemented(__FUNCTION__);
 
 		// TODO: Create a unique shader module. For this, use the loadShader() function to load the
 		// compiled SPIR-V code from the source file. Store the shader module in the provided output parameter.
-		//
+		const auto compiledShader	= loadShader(sourceFile);
+		shaderModule 				= device.createShaderModuleUnique(vk::ShaderModuleCreateInfo({}, compiledShader));
+
 		// TODO: Create a unique pipeline layout, using the incoming descriptorSetLayouts to configure it
 		// for accessing descriptors (=shader input resources). Store it in the provided output parameter.
-		// 
+		pipelineLayout = device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo({}, descriptorSetLayouts));
+
 		// TODO: Create a unique pipeline cache. Store it in the provided output parameter.
-		//
+		pipelineCache = device.createPipelineCacheUnique(vk::PipelineCacheCreateInfo());
+
 		// TODO: Create a unique pipeline. First, prepare a shader stage info. It should be a compute stage
 		// that uses the shader module you made, using the function named "main" as an entry point. Prepare
 		// a pipeline create info that uses the stage info and the above pipeline layout. Finally, create
@@ -141,5 +172,11 @@ namespace Framework
 		// (.result, .value). Check that the .result is vk::Result::eSuccess. If it is not, emit an error.
 		// If it is, store the generated .value in the pipeline output parameter. Because .value is a
 		// unique pointer, you will need to std::move( ) it into the output parameter.
+		const vk::PipelineShaderStageCreateInfo stageCreateInfo({}, vk::ShaderStageFlagBits::eCompute, *shaderModule, "main");
+		pipelineLayout			= device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo({}));
+		const vk::ComputePipelineCreateInfo pipelineCreateInfo({}, stageCreateInfo, *pipelineLayout);
+		auto pipelineRes		= device.createComputePipelineUnique(pipelineCache.get(), pipelineCreateInfo);
+		if (pipelineRes.result != vk::Result::eSuccess) { throw std::runtime_error("Could not create compute pipeline"); }
+		pipeline 				= std::move(pipelineRes.value);
 	}
 }

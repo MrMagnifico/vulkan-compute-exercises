@@ -7,6 +7,8 @@
 #include <vulkan/vulkan.hpp>
 #include <iostream>
 #include <fstream>
+#include <string>
+#include <sstream>
 #include <vma/vk_mem_alloc.h>
 
 namespace Framework

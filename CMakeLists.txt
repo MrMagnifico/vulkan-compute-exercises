@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(VulkanComputeExercsises)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 
 find_package(Vulkan REQUIRED)
 
@@ -20,7 +20,7 @@ function(addGLSL target source)
 	add_custom_command(
 	POST_BUILD 
 	MAIN_DEPENDENCY ${source}
-	COMMAND Vulkan::glslc ${SHADER_FLAGS} ${CMAKE_CURRENT_SOURCE_DIR}/${source} -o ${CMAKE_CURRENT_BINARY_DIR}/${filename}.spv
+	COMMAND glslc ${SHADER_FLAGS} ${CMAKE_CURRENT_SOURCE_DIR}/${source} -o ${CMAKE_CURRENT_BINARY_DIR}/${filename}.spv
 	OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/${filename}.spv
 	)
 endfunction()
