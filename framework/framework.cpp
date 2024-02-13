@@ -144,6 +144,14 @@ namespace Framework
 
 		// TODO: Create a VMA allocator. Follow the standard procedure given in
 		// the official examples. Return the created allocator.
+		VmaAllocatorCreateInfo createInfo	= {};
+		createInfo.physicalDevice			= physicalDevice;
+		createInfo.device					= device;
+		createInfo.instance					= instance;
+		createInfo.vulkanApiVersion			= apiVersion;
+		VmaAllocator allocator;
+		vmaCreateAllocator(&createInfo, &allocator);
+		return allocator;
 	}
 
 	void setupComputePipeline(const char* sourceFile, const std::vector<vk::DescriptorSetLayout>& descriptorSetLayouts,
@@ -173,7 +181,6 @@ namespace Framework
 		// If it is, store the generated .value in the pipeline output parameter. Because .value is a
 		// unique pointer, you will need to std::move( ) it into the output parameter.
 		const vk::PipelineShaderStageCreateInfo stageCreateInfo({}, vk::ShaderStageFlagBits::eCompute, *shaderModule, "main");
-		pipelineLayout			= device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo({}));
 		const vk::ComputePipelineCreateInfo pipelineCreateInfo({}, stageCreateInfo, *pipelineLayout);
 		auto pipelineRes		= device.createComputePipelineUnique(pipelineCache.get(), pipelineCreateInfo);
 		if (pipelineRes.result != vk::Result::eSuccess) { throw std::runtime_error("Could not create compute pipeline"); }

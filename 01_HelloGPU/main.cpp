@@ -54,7 +54,7 @@ int main()
 /*
 ==================================== Task 1 ====================================
 1) Implement the function Framework::setupBasicCompute in framework.cpp.
-2) Implement the function Framework::setupCompuePipeline in framework.cpp.
+2) Implement the function Framework::setupComputePipeline in framework.cpp.
 3) Complete the shader file hello.comp to print a basic message.
 4) Optional: Experiment with different dispatch/work group configurations. There
 is a way to actually set the work group size from the C++ side! You can try to

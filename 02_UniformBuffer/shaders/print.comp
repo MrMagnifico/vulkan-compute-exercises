@@ -16,14 +16,17 @@
 // Finally, give your resource a name so you can use it contents in the shader.
 // If you give your buffer the name foo, you can access its contained integer
 // x via foo.x, y via foo.y, etc.
+layout(set = 0, binding = 0) uniform intVec3 {
+	int x, y, z;
+} intBuffer;
 
 layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+void main() {
 	int sum = 0;
 	
 	// TODO: Read the 3 integers form your uniform buffer and
 	// add them together into the variable "sum".
+	sum = intBuffer.x + intBuffer.y + intBuffer.z;
 
 	debugPrintfEXT("Good job, now you deserve a %x!\n", sum);
 }
