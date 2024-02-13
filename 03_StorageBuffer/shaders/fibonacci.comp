@@ -1,11 +1,22 @@
 #version 450
 
+#define GOLDEN_RATIO 1.6180339887
+#define GOLDEN_RATIO_CONJUGATE -0.6180339887
+
 // TODO: Define the resource. This time, tell GLSL that it is a buffer
 // (not uniform) that contains an integer array of undefined sizes (int data[]).
+layout(set = 0, binding = 0) buffer intArr {
+	int data[];
+} fibonnaciSequence;
+
+float negativeBasePow(float base, uint exponent) {
+	float result = pow(abs(base), exponent);
+	// if (exponent % 2 == 1) { result = -result; }
+	return result;
+}
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+void main() {
 	// TODO: Find out the global thread ID in .x dimension for the thread.
 	// Then, compute the corresponding Fibonacci number. I.e., thread n 
 	// should compute the nth Fibonacci number, and write it to position n 
@@ -27,4 +38,8 @@ void main()
 	// - The final result should be an integer. Convert types in GLSL like so:
 	//   float foo = 5.0;
 	//   int bar = int(foo);    <-- is now 5
+	uint globalId 						= gl_GlobalInvocationID.x;
+	float numeratorLhs					= pow(GOLDEN_RATIO, globalId);
+	float numeratorRhs					= negativeBasePow(GOLDEN_RATIO_CONJUGATE, globalId);
+	fibonnaciSequence.data[globalId]	= int((numeratorLhs - numeratorRhs) / sqrt(5));
 }
