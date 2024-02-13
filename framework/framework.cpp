@@ -140,7 +140,7 @@ namespace Framework
 	VmaAllocator createAllocator(vk::Instance instance, uint32_t apiVersion, vk::PhysicalDevice physicalDevice, vk::Device device)
 	{
 		// TODO: remove this
-		throw NotImplemented(__FUNCTION__);
+		// throw NotImplemented(__FUNCTION__);
 
 		// TODO: Create a VMA allocator. Follow the standard procedure given in
 		// the official examples. Return the created allocator.

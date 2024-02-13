@@ -15,10 +15,10 @@ int main()
 
 		Framework::setupBasicCompute("Task 4", VK_API_VERSION_1_3, {}, {}, instance, physicalDevice, device, queue, commandPool);
 		
-		size_t sizeA = sizeof(int) * 60, sizeX = sizeof(int) * 20;
-		auto bufferUsage = VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-		auto propsA = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-		auto propsX = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+		size_t sizeA 					= sizeof(int) * 60, sizeX = sizeof(int) * 20;
+		auto bufferUsage				= vk::BufferUsageFlagBits::eTransferDst	| vk::BufferUsageFlagBits::eTransferSrc;
+		VkMemoryPropertyFlags propsA 	= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+		VkMemoryPropertyFlags propsX	= VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 		
 		// TODO: Let's use the VMA from here on out... to this end, go ahead and implement
 		// createAllocator in framework.cpp.
@@ -33,6 +33,18 @@ int main()
 		// VkBufferCreateInfo info = vk::BufferCreateInfo({}, ... ), 
 		// which lets you benefit from vulkan.hpp's sensible default constructor parameters. Isn't that neat?
 		VkBuffer bufferA, bufferB, bufferC, bufferD;
+		VkBufferCreateInfo aBufferCreateInfo = vk::BufferCreateInfo({}, sizeA, bufferUsage);
+		VkBufferCreateInfo xBufferCreateInfo = vk::BufferCreateInfo({}, sizeX, bufferUsage);
+		VmaAllocationCreateInfo aBufferAllocInfo = {}, xBufferAllocInfo = {};
+		aBufferAllocInfo.usage = xBufferAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		aBufferAllocInfo.requiredFlags = propsA;
+		xBufferAllocInfo.requiredFlags = propsX;
+		aBufferAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT; // This allows memory to be mappable when when usage is set to VMA_MEMORY_USAGE_AUTO
+		VmaAllocation allocationA, allocationB, allocationC, allocationD;
+		vmaCreateBuffer(allocator, &aBufferCreateInfo, &aBufferAllocInfo, &bufferA, &allocationA, nullptr);
+		vmaCreateBuffer(allocator, &xBufferCreateInfo, &xBufferAllocInfo, &bufferB, &allocationB, nullptr);
+		vmaCreateBuffer(allocator, &xBufferCreateInfo, &xBufferAllocInfo, &bufferC, &allocationC, nullptr);
+		vmaCreateBuffer(allocator, &xBufferCreateInfo, &xBufferAllocInfo, &bufferD, &allocationD, nullptr);
 
 		// The content of this array will be copied across our different buffers
 		int magic[60] = { 
@@ -42,7 +54,12 @@ int main()
 		};
 
 		// TODO: Map the entire host-visible memory of buffer A and write all 60 magic numbers there
+		// ==========================================================================================
 		int* mappedA;
+		vmaMapMemory(allocator, allocationA, (void**) &mappedA);
+		memcpy(mappedA, magic, sizeA);
+		vmaUnmapMemory(allocator, allocationA);
+		vmaFlushAllocation(allocator, allocationA, 0ULL, sizeA);
 
 		// Create our basic command buffer
 		vk::CommandBufferAllocateInfo allocateInfo{ *commandPool, vk::CommandBufferLevel::ePrimary, 1 };
@@ -62,11 +79,14 @@ int main()
 		// reads (destination). This basically says, written data must be visible when we read 
 		// again, but also that writes must be published before we write again! We need the latter 
 		// because the order of the copies matters for getting the correct result.
-		//
+		vk::MemoryBarrier deviceMemoryBarrier(vk::AccessFlagBits::eTransferWrite,
+											  vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite);
+
 		// TODO: Prepare another general memory barrier. This one, we use to ensure that all copies
 		// are available before we read buffer A from the host. The source should thus be transfer 
 		// writes, and the destination host reads.
-		//
+		vk::MemoryBarrier hostMemoryBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eHostRead);
+
 		// TODO: Record the following commands to the command buffer in this exact order:
 		// - Apply the first memory barrier. This ensures that the above copies can be seen by later copies.
 		//   To apply it, you must invoke pipelineBarrier on the command buffer, describe the relevant stages 
@@ -86,6 +106,15 @@ int main()
 		// - Copy 4 integers from buffer B to buffer A. Use offsets of 11 / 6 integers for reading / writing.
 		// - Finally, apply the second memory barrier for reading buffer A from the host safely. In contrast to 
 		//   the other pipeline barriers, now use the host stage as destination stage. 
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, deviceMemoryBarrier, {}, {});
+		cmdBuffers[0]->copyBuffer(bufferC, bufferA, vk::BufferCopy(1 * sizeof(int), 1 * sizeof(int), 19 * sizeof(int)));
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, deviceMemoryBarrier, {}, {});
+		cmdBuffers[0]->copyBuffer(bufferD, bufferA, vk::BufferCopy(0, 10 * sizeof(int), 4 * sizeof(int)));
+		cmdBuffers[0]->copyBuffer(bufferC, bufferA, vk::BufferCopy(15 * sizeof(int), 15 * sizeof(int), 5 * sizeof(int)));
+		cmdBuffers[0]->copyBuffer(bufferA, bufferA, vk::BufferCopy(7 * sizeof(int), 5 * sizeof(int), 1 * sizeof(int)));
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eTransfer, {}, deviceMemoryBarrier, {}, {});
+		cmdBuffers[0]->copyBuffer(bufferB, bufferA, vk::BufferCopy(11 * sizeof(int), 6 * sizeof(int), 4 * sizeof(int)));
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eHost, {}, hostMemoryBarrier, {}, {});
 		
 		cmdBuffers[0]->end();
 
@@ -96,11 +125,17 @@ int main()
 
 		device->waitIdle();
 
-		for (int i = 0; i < 20; i++)
-			std::cout << mappedA[i] << " ";
+		vmaMapMemory(allocator, allocationA, (void**) &mappedA);
+		for (int i = 0; i < 20; i++) { std::cout << mappedA[i] << " "; }
+		vmaUnmapMemory(allocator, allocationA);
 
 		// TODO: Don't forget to clean up the VMA when you are done. This includes unmapping
 		// all still mapped memory, destroying all buffers and eventually the allocator itself. 
+		vmaDestroyBuffer(allocator, bufferA, allocationA);
+		vmaDestroyBuffer(allocator, bufferB, allocationB);
+		vmaDestroyBuffer(allocator, bufferC, allocationC);
+		vmaDestroyBuffer(allocator, bufferD, allocationD);
+		vmaDestroyAllocator(allocator);
 	}
 	catch (Framework::NotImplemented e)
 	{
