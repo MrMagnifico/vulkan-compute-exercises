@@ -2,6 +2,7 @@
 #include <framework.h>
 #include <iostream>
 #include <filesystem>
+#include <array>
 #include <vector>
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -40,48 +41,78 @@ int main(int argc, char* argv[])
 		Framework::setupBasicCompute("Task 5", VK_API_VERSION_1_3, {}, {}, instance, physicalDevice, device, queue, commandPool);
 
 		VmaAllocator allocator = Framework::createAllocator(*instance, VK_API_VERSION_1_3, physicalDevice, *device);
+
 		// Description for the resources that go into our pipeline (and descriptor set):
 		// - One uniform buffer for image parameters (width, height)
 		// - One storage buffer for the source image (width * height * 4 channels, RGBA)
 		// - One storage buffer for the result image (width * height * 4 channels, RGBA)
-
-		VkBufferCreateInfo infoCreate = vk::BufferCreateInfo({}, 2 * sizeof(uint32_t), vk::BufferUsageFlagBits::eUniformBuffer),
-			srcCreate = vk::BufferCreateInfo({}, width * height * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer),
-			dstCreate = vk::BufferCreateInfo({}, width * height * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer);
+		VkBufferCreateInfo	infoCreate	= vk::BufferCreateInfo({}, 2 * sizeof(uint32_t), vk::BufferUsageFlagBits::eUniformBuffer),
+							srcCreate 	= vk::BufferCreateInfo({}, width * height * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer),
+							dstCreate 	= vk::BufferCreateInfo({}, width * height * sizeof(uint32_t), vk::BufferUsageFlagBits::eStorageBuffer);
 		VmaAllocationCreateInfo allocationInfo = { 0, VMA_MEMORY_USAGE_UNKNOWN, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT };
 
 		VkBuffer infoBuffer, srcBuffer, dstBuffer;
 		VmaAllocation infoAllocation, srcAllocation, dstAllocation;
-
 		vmaCreateBuffer(allocator, &infoCreate, &allocationInfo, &infoBuffer, &infoAllocation, nullptr);
 		vmaCreateBuffer(allocator, &srcCreate, &allocationInfo, &srcBuffer, &srcAllocation, nullptr);
 		vmaCreateBuffer(allocator, &dstCreate, &allocationInfo, &dstBuffer, &dstAllocation, nullptr);
 
 		// TODO: Prepare a descriptor pool that can provide a descriptor set,  
-		// two storage buffer descriptors and one uniform buffer descriptor. 
-		// 
+		// two storage buffer descriptors and one uniform buffer descriptor.
+		// ==================================================================
+		// UniqueDescriptorSet frees its allocations when it goes out of scope and so
+		// the pool must be initialised with the VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT flag   
+		std::vector<vk::DescriptorPoolSize> poolSizes = { {vk::DescriptorType::eUniformBuffer, 1U},
+														  {vk::DescriptorType::eStorageBuffer, 2U}};
+		vk::DescriptorPoolCreateInfo poolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 1U, poolSizes);
+		vk::UniqueDescriptorPool descriptorPool = device->createDescriptorPoolUnique(poolCreateInfo);
+
 		// TODO: Define bindings for the buffers in your descriptor set layout.
 		// Make sure they match the bindings in the shader. Create a descriptor
 		// set layout from them.
-		vk::UniqueDescriptorSetLayout descriptorSetLayout;
+		vk::DescriptorSetLayoutBinding infoBinding(0U, vk::DescriptorType::eUniformBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		vk::DescriptorSetLayoutBinding srcBinding(1U, vk::DescriptorType::eStorageBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		vk::DescriptorSetLayoutBinding dstBinding(2U, vk::DescriptorType::eStorageBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		std::array<vk::DescriptorSetLayoutBinding, 3UL> allBindings	= { infoBinding, srcBinding,  dstBinding };
+		vk::DescriptorSetLayoutCreateInfo descLayoutCreateInfo({}, allBindings);
+		vk::UniqueDescriptorSetLayout descriptorSetLayout = device->createDescriptorSetLayoutUnique(descLayoutCreateInfo);
 
-		// TODO: Allocate a descriptor set with the created layout. 
-		vk::UniqueDescriptorSet descriptorSet;
+		// TODO: Allocate a descriptor set with the created layout.
+		vk::DescriptorSetAllocateInfo setAllocateInfo(*descriptorPool, *descriptorSetLayout);
+		std::vector<vk::UniqueDescriptorSet> descriptorSets	= device->allocateDescriptorSetsUnique(setAllocateInfo);
+		vk::UniqueDescriptorSet& descriptorSet 				= descriptorSets[0];
 
 		// TODO: Update the descriptor set to reference your actual buffers in 
 		// the corresponding bindings (use "updateDescriptorSets" with correct
-		// WriteDescriptorSet structs filled in. 
+		// WriteDescriptorSet structs filled in.
+		vk::DescriptorBufferInfo infoBuffDescriptorInfo(infoBuffer, 0UL, VK_WHOLE_SIZE);
+		vk::DescriptorBufferInfo srcBuffDescriptorInfo(srcBuffer, 0UL, VK_WHOLE_SIZE);
+		vk::DescriptorBufferInfo dstBuffDescriptorInfo(dstBuffer, 0UL, VK_WHOLE_SIZE);
+		vk::WriteDescriptorSet infoDescriptorSetWrite(*descriptorSet, 0U, 0U, 1U, vk::DescriptorType::eUniformBuffer, {}, &infoBuffDescriptorInfo);
+		vk::WriteDescriptorSet srcDescriptorSetWrite(*descriptorSet, 1U, 0U, 1U, vk::DescriptorType::eStorageBuffer, {}, &srcBuffDescriptorInfo);
+		vk::WriteDescriptorSet dstDescriptorSetWrite(*descriptorSet, 2U, 0U, 1U, vk::DescriptorType::eStorageBuffer, {}, &dstBuffDescriptorInfo);
+		device->updateDescriptorSets({infoDescriptorSetWrite, srcDescriptorSetWrite, dstDescriptorSetWrite}, {});
 	
 		// TODO: Fill the created buffers with information. 
 		// 
 		// TODO: The info buffer is for meta information that we need, the width and the 
 		// height of the image. Map its memory and then write the two integers in this order, 
 		// 1) width 2) height.
-		//
+		uint32_t* mappedInfo;
+		vmaMapMemory(allocator, infoAllocation, (void**) &mappedInfo);
+		mappedInfo[0] = width, mappedInfo[1] = height;
+		vmaUnmapMemory(allocator, infoAllocation);
+		vmaFlushAllocation(allocator, infoAllocation, 0ULL, VK_WHOLE_SIZE);
+
 		// TODO: The src buffer is for storing the image color data. Map its memory
 		// and then copy the contents of the image vector there. Ideally use std::memcpy.
 		// Hint: at the end of this program, we already do something similar, just in the 
-		// opposite direction, i.e., copying from mapped memory into a vector. 
+		// opposite direction, i.e., copying from mapped memory into a vector.
+		uint32_t* mappedSrc;
+		vmaMapMemory(allocator, srcAllocation, (void**) &mappedSrc);
+		std::memcpy(mappedSrc, image.data(), image.size());
+		vmaUnmapMemory(allocator, srcAllocation);
+		vmaFlushAllocation(allocator, srcAllocation, 0ULL, VK_WHOLE_SIZE);
 
 		vk::UniqueShaderModule shaderModule;
 		vk::UniquePipelineLayout layout;
@@ -102,11 +133,13 @@ int main(int argc, char* argv[])
 		// of computing how many groups are needed to cover the image's width and height. Note: C++
 		// by default rounds integers DOWN! E.g., for a 17x17 image, 17/16 = 1. If our image is 
 		// 17x17 pixels, but we start a 1x1 grid with 16x16 groups, would you expect correct results?
-
-		cmdBuffers[0]->dispatch(1, 1, 1);
+		uint32_t xGroups = (width / 16U) + 1U, yGroups = (height / 16U) + 1U;
+		cmdBuffers[0]->dispatch(xGroups, yGroups, 1);
 
 		// TODO: We need a barrier to make sure the written data can be safely read by the CPU. 
 		// By now you know the drill! Note that you can probably use code from the previous task.
+		vk::MemoryBarrier hostReadBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, hostReadBarrier, {}, {});
 
 		cmdBuffers[0]->end();
 

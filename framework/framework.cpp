@@ -182,7 +182,7 @@ namespace Framework
 		// unique pointer, you will need to std::move( ) it into the output parameter.
 		const vk::PipelineShaderStageCreateInfo stageCreateInfo({}, vk::ShaderStageFlagBits::eCompute, *shaderModule, "main");
 		const vk::ComputePipelineCreateInfo pipelineCreateInfo({}, stageCreateInfo, *pipelineLayout);
-		auto pipelineRes		= device.createComputePipelineUnique(pipelineCache.get(), pipelineCreateInfo);
+		auto pipelineRes		= device.createComputePipelineUnique(*pipelineCache, pipelineCreateInfo);
 		if (pipelineRes.result != vk::Result::eSuccess) { throw std::runtime_error("Could not create compute pipeline"); }
 		pipeline 				= std::move(pipelineRes.value);
 	}
