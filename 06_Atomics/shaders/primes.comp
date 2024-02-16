@@ -1,29 +1,35 @@
 #version 450
 
-layout (set = 0, binding = 0) buffer Counter
-{
+layout (set = 0, binding = 0) buffer Counter {
 	uint value;
 } count;
 
-layout (set = 0, binding = 1) buffer OutputBuffer
-{
+layout (set = 0, binding = 1) buffer OutputBuffer {
 	uint data[];
 } primes;
 
 // TODO: Implement any primality test you like that outputs
 // for a given integer whether or not it is prime. 
 // https://en.wikipedia.org/wiki/Primality_test
-bool isPrime(uint n)
-{
+bool isPrime(uint n) {
+    if (n == 2 || n == 3)                   { return true; }
+    if (n <= 1 || n % 2 == 0 || n % 3 == 0) { return false; }
+    for (uint i = 5; i * i <= n; i += 6) {
+        if (n % i == 0 || n % (i + 2) == 0) { return false; }
+    }
     return true;
 }
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+void main() {
     // TODO: Each thread should test if its index n is prime.
     // If it is, it should atomically increment the number of detected
     // prime numbers. Use the return value of the atomic operation
     // as the location for writing the number n into the output array.
-    // If the number is not prime, do not write anything. 
+    // If the number is not prime, do not write anything.
+    const uint threadIdx = int(gl_GlobalInvocationID.x); // We assume that all threads are handling valid memory locations
+    if (isPrime(threadIdx)) {
+        uint writeLoc           = atomicAdd(count.value, 1);
+        primes.data[writeLoc]   = threadIdx;
+    }
 }
