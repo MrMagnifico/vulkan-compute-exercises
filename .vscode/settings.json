@@ -79,5 +79,10 @@
     },
     "cmake.buildEnvironment": {
         "RENDERDOC_DIR": "C:/Program Files/RenderDoc"
+    },
+    "cmake.debugConfig": {
+        "args": [
+            "C:\\Users\\willy\\Documents\\Random Bullshit\\vulkan-compute-exercises\\assets\\griffin.obj"
+        ]
     }
 }

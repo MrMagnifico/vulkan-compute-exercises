@@ -1,31 +1,54 @@
 #version 450
 
-layout (std140, set = 0, binding = 0) uniform Params
-{
-    uint resolution[2];
+#extension GL_EXT_debug_printf : require // Require printf support for print statement debugging
+
+layout (std140, set = 0, binding = 0) uniform Params {
+    uint resolution[2]; // [0] => X-axis/width | [1] => Y-axis/height
 	uint numPoints;
 	mat4 mvp;
 } params;
 
-struct Point
-{
+struct Point {
 	vec3 position;
 	vec3 color;
 };
 
-layout (std430, set = 0, binding = 1) buffer PointCloud
-{
+layout (std430, set = 0, binding = 1) buffer PointCloud {
 	Point data[];
 } pointcloud;
 
-layout (std430, set = 0, binding = 2) buffer Image
-{
+layout (std430, set = 0, binding = 2) buffer Image {
 	uint data[];
 } image;
 
+void printInputs() {
+	// Params
+	debugPrintfEXT("=== Params ===\n");
+	debugPrintfEXT("Resolution: (%d, %d)\n", params.resolution[0], params.resolution[1]);
+	debugPrintfEXT("Num points: %d\n", params.numPoints);
+	debugPrintfEXT("MVP matrix:\n");
+	for (uint i = 0; i < 4; i++) {
+		for (uint j = 0; j < 4; j++) {
+			debugPrintfEXT("%f ", params.mvp[i][j]);
+		}
+		debugPrintfEXT("\n");
+	}
+
+	// Second point cloud point
+	Point point = pointcloud.data[1];
+	debugPrintfEXT("Point 1: position(%f, %f, %f) color(%f, %f, %f)\n", point.position.x, point.position.y, point.position.z,
+																	    point.color.x, point.color.y, point.color.z);
+}
+
+float mapRange(float value, float domainMin, float domainMax, float rangeMin, float rangeMax) {
+	float percentage = (value - domainMin) / (domainMax - domainMin);	// Calculate the percentage of the value within the input range
+	return rangeMin + percentage * (rangeMax - rangeMin);           	// Map the percentage to the output range
+}
+
+uint imageBufferOffset(int x, int y) { return x + (y * params.resolution[0]); }
+
 // Compresses a vec3 with colors in range [0, 1] to 16-color RGB
-uint compress16(vec3 rgb)
-{
+uint compress16(vec3 rgb) {
 	uint result;
 	rgb = clamp(rgb, 0, 1);
 	result = uint(rgb.r * 15.0f);
@@ -35,16 +58,17 @@ uint compress16(vec3 rgb)
 }
 
 layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+void main() {
 	// Implement a simple point cloud renderer with atomics, using one thread per point.
 	// To do this, we have to make sure that only the closest points remain visible in 
 	// every pixel. We will use atomicMin for this.
-	//
+
 	// TODO: Find the id of the current thread. We have started some number of threads. 
 	// Maybe more than there are points? Redundant threads should not try to load points 
 	// because we don't have data for them. Best terminate them here.
-	// 
+	uint id = gl_GlobalInvocationID.x;
+	if (id > params.numPoints) { return; }
+
 	// TODO: Fetch the .position of this thread's point from the pointcloud buffer.
 	// Turn it into a vec4 (fourth coordinate should be 1) and project it onto the 
 	// screen by multiplying it (from the left) with the matrix .mvp from the render 
@@ -55,20 +79,37 @@ void main()
 	// the coordinates to uints in the range [0, params.width) for x, [0, params.height) 
 	// for y and [0, 2^24) for z. I.e., the coordinate (-1, -1, 0) should become (0, 0, 0).
 	// The coordinate (1, 1, 1) should become (width-1, height-1, 2^20 - 1).
-	//
+	Point point 		= pointcloud.data[id];
+	vec4 pointPos		= vec4(point.position, 1.0); 
+	vec4 screenPos		= params.mvp * pointPos;
+	screenPos			/= screenPos.w;
+	uvec3 pixelCoords	= uvec3(mapRange(screenPos.x, -1.0, 1.0, 0, params.resolution[0] - 1),
+								mapRange(screenPos.y, -1.0, 1.0, 0, params.resolution[1] - 1),
+								mapRange(screenPos.z, 0.0, 1.0, 0, pow(2, 20) - 1));
+
 	// TODO: Fetch the .color of this thread's point from the pointcloud buffer. Compress 
 	// it into a uint using the compress16 function. Now, take the z coordinate (depth) 
 	// you computed before, shift it by 12 bits (<<) and add it onto the color. Now you 
 	// have a single 32bit value where the highest 20 bits are depth and the lower 12 bits 
 	// encode RGB color: [<----depth (20)----><-RGB (12)->]. Note that if we would sort
 	// multiple of these values, the lowest one is also the one with the lowest depth.
-	//
+	uint depthColor	= compress16(point.color);
+	depthColor		|= pixelCoords.z << 12;
+
 	// TODO: Traverse a 3x3 window around the current point's pixel. The image has been
 	// initalized with all bits set (UINT_MAX) at each pixel. At each pixel, perform 
 	// an atomicMin with the 32bit value (combined depth and color) you computed on the
 	// image data buffer. If done correctly, the color of the closest point should end up 
 	// in each output pixel when the shader is done.
-	uint id = gl_GlobalInvocationID.x;
-	if(id > params.numPoints)
-		return;
+	for (int xOffset = -1; xOffset <= 1; xOffset++) {
+		int xNeighbor = int(pixelCoords.x) + xOffset;
+		if (xNeighbor < 0 || xNeighbor >= params.resolution[0]) { continue; }
+		for (int yOffset = -1; yOffset <= 1; yOffset++) {
+			int yNeighbor = int(pixelCoords.y) + yOffset;
+			if (yNeighbor < 0 || yNeighbor >= params.resolution[1]) { continue; }
+
+			uint bufferOffsetPixel = imageBufferOffset(xNeighbor, yNeighbor);
+			atomicMin(image.data[bufferOffsetPixel], depthColor);
+		}
+	}
 }
