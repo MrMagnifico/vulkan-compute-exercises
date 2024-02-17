@@ -28,6 +28,7 @@ int main(int argc, char* argv[])
 		cmdBuffers[0]->begin(vk::CommandBufferBeginInfo{});
 		cmdBuffers[0]->bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
 		cmdBuffers[0]->dispatch(1, 1, 1);
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, {}, {}, {});
 		cmdBuffers[0]->end();
 
 		Framework::initDebugging();
