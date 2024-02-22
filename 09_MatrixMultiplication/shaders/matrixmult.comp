@@ -7,6 +7,9 @@
 
 #define LOCAL_SIZE 32 // Threads are organised in (LOCAL_SIZE x LOCAL_SIZE) blocks
 
+shared float aSub[LOCAL_SIZE][LOCAL_SIZE];
+shared float bSub[LOCAL_SIZE][LOCAL_SIZE];
+
 struct MatrixInfo {
 	uint width;
     uint height;
@@ -45,9 +48,46 @@ void debugPrintInput() {
     }
 }
 
-float memOffset(const MatrixInfo matInfo, int row, int col) { return row * matInfo.stride + col; }
+uint memOffset(uint row, uint col, uint stride) { return row * stride + col; }
 
 layout(local_size_x = LOCAL_SIZE, local_size_y = LOCAL_SIZE, local_size_z = 1) in;
 void main() {
-    debugPrintInput(); // TODO: Remove
+    // Compute global ID of thread and terminate if it's outside the bounds of the output matrix C
+    uint globalIdX  = gl_GlobalInvocationID.x;
+    uint globalIdY  = gl_GlobalInvocationID.y;
+    if (globalIdX >= matC.info.width || globalIdY >= matC.info.height) { return; }
+
+    // IDs of threads within blocks
+    uint threadIdX  = gl_LocalInvocationID.x;
+    uint threadIdY  = gl_LocalInvocationID.y;
+
+    // Constant portions of top-left corner in sub-matrices
+    uint xTopLeftMatA   = gl_WorkGroupSize.x * gl_WorkGroupID.x;
+    uint yTopLeftMatB   = gl_WorkGroupSize.y * gl_WorkGroupID.y;
+
+    // Compute final matrix multiplication value as sum of sub-matrix multiplications
+    float cSum = 0.0;
+    for (uint subMatrix = 0; subMatrix < gl_NumWorkGroups.x; subMatrix++) {
+        // Dynamic portions of top-left corner in sub-matrices
+        uint yTopLeftMatA   = subMatrix * gl_WorkGroupSize.x;
+        uint xTopLeftMatB   = subMatrix * gl_WorkGroupSize.y;
+
+        // Copy sub-matrix elements from global memory
+        uvec2 coordsMatA    = uvec2(xTopLeftMatA + threadIdX, yTopLeftMatA + threadIdY);
+        uvec2 coordsMatB    = uvec2(xTopLeftMatB + threadIdX, yTopLeftMatB + threadIdY);
+        if (coordsMatA.x >= matA.info.width || coordsMatA.y >= matA.info.height)    { aSub[threadIdX][threadIdY] = 0.0; }
+        else                                                                        { aSub[threadIdX][threadIdY] = matA.data[memOffset(coordsMatA.x, coordsMatA.y, matA.info.stride)]; }
+        if (coordsMatB.x >= matB.info.width || coordsMatB.y >= matB.info.height)    { bSub[threadIdX][threadIdY] = 0.0; }
+        else                                                                        { bSub[threadIdX][threadIdY] = matB.data[memOffset(coordsMatB.x, coordsMatB.y, matB.info.stride)]; }
+        barrier();
+
+        // Multiply sub-matrices together
+        for (uint freeAxisIdx = 0; freeAxisIdx < LOCAL_SIZE; freeAxisIdx++) {
+            cSum += aSub[threadIdX][freeAxisIdx] * bSub[freeAxisIdx][threadIdY];
+        }
+        barrier();
+    }
+
+    // Write final result to result matrix
+    matC.data[memOffset(globalIdX, globalIdY, matC.info.stride)] = cSum;
 }
