@@ -9,7 +9,6 @@
 struct MatrixInfo {
 	uint32_t width;
     uint32_t height;
-    uint32_t stride;
 };
 
 template<size_t W, size_t H>
@@ -95,7 +94,7 @@ int main(int argc, char* argv[]) {
 
 		// Transfer matrix data to GPU
 		Matrix<N, N> *aMapped, *bMapped, *cMapped;
-		MatrixInfo singleInfo 			= { N, N, N };
+		MatrixInfo singleInfo 			= { N, N };
 		constexpr size_t singleMatSize	= N * N * sizeof(float);
 		vmaMapMemory(allocator, aAlloc, (void**) &aMapped);
 		vmaMapMemory(allocator, bAlloc, (void**) &bMapped);
@@ -135,14 +134,15 @@ int main(int argc, char* argv[]) {
 		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, memoryBarrier, {}, {});
 		cmdBuffers[0]->end();
 
-		// Execute command buffer with optional debugging
+		// Time GPU execution
+		auto beforeGPU = std::chrono::system_clock::now();
 		Framework::initDebugging();
 		Framework::beginCapture();
-		queue.submit(vk::SubmitInfo({}, {}, * cmdBuffers[0]));
+		queue.submit(vk::SubmitInfo({}, {}, * cmdBuffers[0]));	// Execute command buffer with optional debugging
 		Framework::endCapture();
-
-		// Wait until device is idle before proceeding
-		device->waitIdle();
+		device->waitIdle();										// Wait until device is idle before proceeding
+		auto afterGPU = std::chrono::system_clock::now();
+		std::cout << "GPU time: " << std::chrono::duration_cast<std::chrono::milliseconds>(afterGPU - beforeGPU).count() << " ms\n";
 
 		// Copy result data from GPU
 		vmaMapMemory(allocator, cAlloc, (void**) cMapped);

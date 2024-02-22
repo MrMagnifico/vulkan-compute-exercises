@@ -13,7 +13,6 @@ shared float bSub[LOCAL_SIZE][LOCAL_SIZE];
 struct MatrixInfo {
 	uint width;
     uint height;
-    uint stride;
 };
 
 layout (std430, set = 0, binding = 0) buffer MatrixA {
@@ -37,14 +36,14 @@ void debugPrintInput() {
     uint idY = gl_GlobalInvocationID.y;
     if (idX == 0 && idY == 0) {
         debugPrintfEXT("=== Matrix A ===\n");
-        debugPrintfEXT("W: %d H: %d S: %d\n", matA.info.width, matA.info.height, matA.info.stride);
+        debugPrintfEXT("W: %d H: %d\n", matA.info.width, matA.info.height);
         debugPrintfEXT("R0C1: %f\n", matA.data[1]);
         debugPrintfEXT("=== Matrix B ===\n");
-        debugPrintfEXT("W: %d H: %d S: %d\n", matB.info.width, matB.info.height, matB.info.stride);
+        debugPrintfEXT("W: %d H: %d\n", matB.info.width, matB.info.height);
         debugPrintfEXT("R0C1: %f\n", matB.data[1]);
         debugPrintfEXT("=== Matrix C ===\n");
         debugPrintfEXT("R0C1: %f\n", matC.data[1]);
-        debugPrintfEXT("W: %d H: %d S: %d\n", matC.info.width, matC.info.height, matC.info.stride);
+        debugPrintfEXT("W: %d H: %d\n", matC.info.width, matC.info.height);
     }
 }
 
@@ -76,9 +75,9 @@ void main() {
         uvec2 coordsMatA    = uvec2(xTopLeftMatA + threadIdX, yTopLeftMatA + threadIdY);
         uvec2 coordsMatB    = uvec2(xTopLeftMatB + threadIdX, yTopLeftMatB + threadIdY);
         if (coordsMatA.x >= matA.info.width || coordsMatA.y >= matA.info.height)    { aSub[threadIdX][threadIdY] = 0.0; }
-        else                                                                        { aSub[threadIdX][threadIdY] = matA.data[memOffset(coordsMatA.x, coordsMatA.y, matA.info.stride)]; }
+        else                                                                        { aSub[threadIdX][threadIdY] = matA.data[memOffset(coordsMatA.x, coordsMatA.y, matA.info.width)]; }
         if (coordsMatB.x >= matB.info.width || coordsMatB.y >= matB.info.height)    { bSub[threadIdX][threadIdY] = 0.0; }
-        else                                                                        { bSub[threadIdX][threadIdY] = matB.data[memOffset(coordsMatB.x, coordsMatB.y, matB.info.stride)]; }
+        else                                                                        { bSub[threadIdX][threadIdY] = matB.data[memOffset(coordsMatB.x, coordsMatB.y, matB.info.width)]; }
         barrier();
 
         // Multiply sub-matrices together
@@ -89,5 +88,5 @@ void main() {
     }
 
     // Write final result to result matrix
-    matC.data[memOffset(globalIdX, globalIdY, matC.info.stride)] = cSum;
+    matC.data[memOffset(globalIdX, globalIdY, matC.info.width)] = cSum;
 }
