@@ -1,9 +1,92 @@
 #version 450
 
+#extension GL_EXT_debug_printf : require // Require printf support for print statement debugging
+
 // TODO: List all necessary resources and implement the matrix multiplication
 // shader. Also pick an adequate work group size for the problem.
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+#define LOCAL_SIZE 32 // Threads are organised in (LOCAL_SIZE x LOCAL_SIZE) blocks
+
+shared float aSub[LOCAL_SIZE][LOCAL_SIZE];
+shared float bSub[LOCAL_SIZE][LOCAL_SIZE];
+
+struct MatrixInfo {
+	uint width;
+    uint height;
+};
+
+layout (std430, set = 0, binding = 0) buffer MatrixA {
+    MatrixInfo info;
+    float data[];
+} matA;
+
+layout (std430, set = 0, binding = 1) buffer MatrixB {
+    MatrixInfo info;
+    float data[];
+} matB;
+
+layout (std430, set = 0, binding = 2) buffer MatrixC {
+    MatrixInfo info;
+    float data[];
+} matC;
+
+
+void debugPrintInput() {
+    uint idX = gl_GlobalInvocationID.x;
+    uint idY = gl_GlobalInvocationID.y;
+    if (idX == 0 && idY == 0) {
+        debugPrintfEXT("=== Matrix A ===\n");
+        debugPrintfEXT("W: %d H: %d\n", matA.info.width, matA.info.height);
+        debugPrintfEXT("R0C1: %f\n", matA.data[1]);
+        debugPrintfEXT("=== Matrix B ===\n");
+        debugPrintfEXT("W: %d H: %d\n", matB.info.width, matB.info.height);
+        debugPrintfEXT("R0C1: %f\n", matB.data[1]);
+        debugPrintfEXT("=== Matrix C ===\n");
+        debugPrintfEXT("R0C1: %f\n", matC.data[1]);
+        debugPrintfEXT("W: %d H: %d\n", matC.info.width, matC.info.height);
+    }
+}
+
+uint memOffset(uint row, uint col, uint stride) { return row * stride + col; }
+
+layout(local_size_x = LOCAL_SIZE, local_size_y = LOCAL_SIZE, local_size_z = 1) in;
+void main() {
+    // Compute global ID of thread and terminate if it's outside the bounds of the output matrix C
+    uint globalIdX  = gl_GlobalInvocationID.x;
+    uint globalIdY  = gl_GlobalInvocationID.y;
+    if (globalIdX >= matC.info.width || globalIdY >= matC.info.height) { return; }
+
+    // IDs of threads within blocks
+    uint threadIdX  = gl_LocalInvocationID.x;
+    uint threadIdY  = gl_LocalInvocationID.y;
+
+    // Constant portions of top-left corner in sub-matrices
+    uint xTopLeftMatA   = gl_WorkGroupSize.x * gl_WorkGroupID.x;
+    uint yTopLeftMatB   = gl_WorkGroupSize.y * gl_WorkGroupID.y;
+
+    // Compute final matrix multiplication value as sum of sub-matrix multiplications
+    float cSum = 0.0;
+    for (uint subMatrix = 0; subMatrix < gl_NumWorkGroups.x; subMatrix++) {
+        // Dynamic portions of top-left corner in sub-matrices
+        uint yTopLeftMatA   = subMatrix * gl_WorkGroupSize.x;
+        uint xTopLeftMatB   = subMatrix * gl_WorkGroupSize.y;
+
+        // Copy sub-matrix elements from global memory
+        uvec2 coordsMatA    = uvec2(xTopLeftMatA + threadIdX, yTopLeftMatA + threadIdY);
+        uvec2 coordsMatB    = uvec2(xTopLeftMatB + threadIdX, yTopLeftMatB + threadIdY);
+        if (coordsMatA.x >= matA.info.width || coordsMatA.y >= matA.info.height)    { aSub[threadIdX][threadIdY] = 0.0; }
+        else                                                                        { aSub[threadIdX][threadIdY] = matA.data[memOffset(coordsMatA.x, coordsMatA.y, matA.info.width)]; }
+        if (coordsMatB.x >= matB.info.width || coordsMatB.y >= matB.info.height)    { bSub[threadIdX][threadIdY] = 0.0; }
+        else                                                                        { bSub[threadIdX][threadIdY] = matB.data[memOffset(coordsMatB.x, coordsMatB.y, matB.info.width)]; }
+        barrier();
+
+        // Multiply sub-matrices together
+        for (uint freeAxisIdx = 0; freeAxisIdx < LOCAL_SIZE; freeAxisIdx++) {
+            cSum += aSub[threadIdX][freeAxisIdx] * bSub[freeAxisIdx][threadIdY];
+        }
+        barrier();
+    }
+
+    // Write final result to result matrix
+    matC.data[memOffset(globalIdX, globalIdY, matC.info.width)] = cSum;
 }
