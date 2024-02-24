@@ -11,12 +11,35 @@
 
 shared float arrLocal[LOCAL_SIZE];
 
-layout (std430, set = 0, binding = 0) buffer InputArr {
+layout (std140, set = 0, binding = 0) uniform ArrLen {
+    uint num;
+} arrLen;
+
+layout (std430, set = 0, binding = 1) buffer InputArr {
     float data[];
 } inputArr;
 
 
 layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main() {
+    // ID of thread within current work group
+    uint threadId               = gl_LocalInvocationID.x;
 
+    // Load two elements per thread and perform first iteration of reduction loop
+    // Bound check is conducted on indices and zeroes are placed if threads are addressing indices past length to be operated on
+    uint firstIterFirstElemIdx  = gl_WorkGroupID.x * (gl_WorkGroupSize.x * 2) + threadId;
+    uint firstIterSecondElemIdx = firstIterFirstElemIdx + gl_WorkGroupSize.x;
+    float firstElem             = firstIterFirstElemIdx  < arrLen.num   ? inputArr.data[firstIterFirstElemIdx]  : 0.0;
+    float secondElem            = firstIterSecondElemIdx < arrLen.num   ? inputArr.data[firstIterSecondElemIdx] : 0.0;
+    arrLocal[threadId]          = firstElem + secondElem;
+    barrier();
+
+    // Perform reduction on all elements covered by this work group
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (threadId < stride) { arrLocal[threadId] += arrLocal[threadId + stride]; }
+        barrier();
+    }
+
+    // Write result for this work group to global memory
+    if (threadId == 0) { inputArr.data[gl_WorkGroupID.x] = arrLocal[0]; }
 }

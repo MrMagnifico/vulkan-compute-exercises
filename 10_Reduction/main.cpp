@@ -11,7 +11,7 @@
 
 int main(int argc, char* argv[]) {
 	// Fill out array to be reduced and compute reference sum
-	constexpr int N = 20'000'000;
+	constexpr int N = 16'777'216;
 	std::default_random_engine eng(42);
 	std::uniform_real_distribution<float> dist;
 	std::vector<float> input(N);
@@ -47,23 +47,29 @@ int main(int argc, char* argv[]) {
 		// GPU-side buffers, as well as necessary parameters (check the shader source).
 
 		// Create buffer and allocate memory for its storage
-		constexpr size_t buffSize = N * sizeof(float);
-		VkBuffer arrBuff;
-		VkBufferCreateInfo arrBuffCreateInfo = vk::BufferCreateInfo({}, buffSize, vk::BufferUsageFlagBits::eStorageBuffer);
-		VmaAllocationCreateInfo arrBuffAllocInfo = {};
-		arrBuffAllocInfo.usage 			= VMA_MEMORY_USAGE_AUTO;
-		arrBuffAllocInfo.requiredFlags	= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-		arrBuffAllocInfo.flags 			= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-		VmaAllocation arrAlloc;
+		constexpr size_t arrBuffSize = N * sizeof(float);
+		VkBuffer arrBuff, arrLenBuff;
+		VkBufferCreateInfo arrBuffCreateInfo 	= vk::BufferCreateInfo({}, arrBuffSize, vk::BufferUsageFlagBits::eStorageBuffer);
+		VkBufferCreateInfo arrLenBuffCreateInfo	= vk::BufferCreateInfo({}, sizeof(uint32_t), vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eTransferDst);
+		VmaAllocationCreateInfo arrBuffAllocInfo = {}, arrLenBuffAllocInfo = {};
+		arrBuffAllocInfo.usage = arrLenBuffAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
+		arrBuffAllocInfo.requiredFlags	= arrLenBuffAllocInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT 	|
+																			  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT	|
+																			  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+		arrBuffAllocInfo.flags = arrLenBuffAllocInfo.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+		VmaAllocation arrAlloc, arrLenAlloc;
 		vmaCreateBuffer(allocator, &arrBuffCreateInfo, &arrBuffAllocInfo, &arrBuff, &arrAlloc, nullptr);
+		vmaCreateBuffer(allocator, &arrLenBuffCreateInfo, &arrLenBuffAllocInfo, &arrLenBuff, &arrLenAlloc, nullptr);
 
 		// Define descriptor pool to provide needed bindings
-		std::vector<vk::DescriptorPoolSize> poolSizes	= {{vk::DescriptorType::eStorageBuffer, 1U}};
+		std::vector<vk::DescriptorPoolSize> poolSizes	= {{vk::DescriptorType::eUniformBuffer, 1U},
+														   {vk::DescriptorType::eStorageBuffer, 1U}};
 		vk::DescriptorPoolCreateInfo poolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 1U, poolSizes);
 		vk::UniqueDescriptorPool descriptorPool 		= device->createDescriptorPoolUnique(poolCreateInfo);
 		// Define bindings for needed buffers
-		vk::DescriptorSetLayoutBinding arrBinding(0U, vk::DescriptorType::eStorageBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
-		std::array<vk::DescriptorSetLayoutBinding, 1UL> allBindings	= { arrBinding };
+		vk::DescriptorSetLayoutBinding arrLenBinding(0U, vk::DescriptorType::eUniformBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		vk::DescriptorSetLayoutBinding arrBinding(1U, vk::DescriptorType::eStorageBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		std::array<vk::DescriptorSetLayoutBinding, 2UL> allBindings	= { arrBinding, arrLenBinding };
 		vk::DescriptorSetLayoutCreateInfo descLayoutCreateInfo({}, allBindings);
 		vk::UniqueDescriptorSetLayout descriptorSetLayout = device->createDescriptorSetLayoutUnique(descLayoutCreateInfo);
 		// Create descriptor set
@@ -71,14 +77,16 @@ int main(int argc, char* argv[]) {
 		std::vector<vk::UniqueDescriptorSet> descriptorSets	= device->allocateDescriptorSetsUnique(setAllocateInfo);
 		vk::UniqueDescriptorSet& descriptorSet 				= descriptorSets[0];
 		// Connect bindings in descriptor set to actual buffers
+		vk::DescriptorBufferInfo arrLenBuffDescriptorInfo(arrLenBuff, 0UL, VK_WHOLE_SIZE);
+		vk::WriteDescriptorSet arrLenDescriptorSetWrite(*descriptorSet, 0U, 0U, 1U, vk::DescriptorType::eUniformBuffer, {}, &arrLenBuffDescriptorInfo);
 		vk::DescriptorBufferInfo arrBuffDescriptorInfo(arrBuff, 0UL, VK_WHOLE_SIZE);
-		vk::WriteDescriptorSet arrDescriptorSetWrite(*descriptorSet, 0U, 0U, 1U, vk::DescriptorType::eStorageBuffer, {}, &arrBuffDescriptorInfo);
-		device->updateDescriptorSets({arrDescriptorSetWrite}, {});
+		vk::WriteDescriptorSet arrDescriptorSetWrite(*descriptorSet, 1U, 0U, 1U, vk::DescriptorType::eStorageBuffer, {}, &arrBuffDescriptorInfo);
+		device->updateDescriptorSets({arrLenDescriptorSetWrite, arrDescriptorSetWrite}, {});
 
 		// Transfer array data to GPU memory
 		float* arrMapped;
 		vmaMapMemory(allocator, arrAlloc, (void**) &arrMapped);
-		std::memcpy(arrMapped, input.data(), buffSize);
+		std::memcpy(arrMapped, input.data(), arrBuffSize);
 		vmaUnmapMemory(allocator, arrAlloc);
 		vmaFlushAllocation(allocator, arrAlloc, 0U, VK_WHOLE_SIZE);
 
@@ -89,19 +97,36 @@ int main(int argc, char* argv[]) {
 		vk::UniquePipeline pipeline;
 		Framework::setupComputePipeline("reduce.comp.spv", { *descriptorSetLayout }, *device, shaderModule, layout, cache, pipeline);
 
-		// Define work group size and number
-		constexpr uint32_t workGroupSize 	= 1024U; // Must be the same as LOCAL_SIZE in shaders/reduce.comp
-		constexpr uint32_t numWorkGroups	= (N / workGroupSize) + 1U;
-
 		// TODO: Set up your submission and submit your command buffer! 
 		vk::CommandBufferAllocateInfo allocateInfo(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
 		auto cmdBuffers = device->allocateCommandBuffersUnique(allocateInfo);
-		vk::MemoryBarrier memoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
+		vk::MemoryBarrier hostReadMemBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
+		vk::MemoryBarrier shaderRecursionMemBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
+		vk::MemoryBarrier lenUpdateComputeMemBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
+		vk::MemoryBarrier lenUpdateShaderReadMemBarrier(vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eTransferWrite);
 		cmdBuffers[0]->begin(vk::CommandBufferBeginInfo{});
 		cmdBuffers[0]->bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
 		cmdBuffers[0]->bindDescriptorSets(vk::PipelineBindPoint::eCompute, *layout, 0, *descriptorSet, {});
+		
+		// Recursion to reduce in chunks of workGroupSize
+		constexpr uint32_t workGroupSize	= 1024U; // Must be the same as LOCAL_SIZE in shaders/reduce.comp
+		uint32_t elemsToReduce				= N;
+		uint32_t numWorkGroups				= ((elemsToReduce / 2U) / workGroupSize) + 1U;
+		do {
+			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
+										   {}, lenUpdateShaderReadMemBarrier, {}, {});
+			cmdBuffers[0]->updateBuffer(arrLenBuff, 0, sizeof(uint32_t), &elemsToReduce);
+			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
+										   {}, lenUpdateComputeMemBarrier, {}, {});
+			cmdBuffers[0]->dispatch(numWorkGroups, 1, 1);
+			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
+										   {}, shaderRecursionMemBarrier, {}, {});
+			elemsToReduce	= elemsToReduce % 2U == 0U ? elemsToReduce / 2U : (elemsToReduce / 2U) + 1U;
+			numWorkGroups	= (elemsToReduce / workGroupSize) + 1U;
+		} while (elemsToReduce > 1U);
 		cmdBuffers[0]->dispatch(numWorkGroups, 1, 1);
-		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, memoryBarrier, {}, {});
+
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, hostReadMemBarrier, {}, {});
 		cmdBuffers[0]->end();
 
 		// Time GPU execution
@@ -133,6 +158,7 @@ int main(int argc, char* argv[]) {
 
 		// Free allocated resources
 		vmaDestroyBuffer(allocator, arrBuff, arrAlloc);
+		vmaDestroyBuffer(allocator, arrLenBuff, arrLenAlloc);
 		vmaDestroyAllocator(allocator);
 	}
 	catch (Framework::NotImplemented e) { std::cerr << e.what() << std::endl; }
