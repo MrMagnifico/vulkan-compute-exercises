@@ -11,7 +11,7 @@
 
 int main(int argc, char* argv[]) {
 	// Fill out array to be reduced and compute reference sum
-	constexpr int N = 16'777'216;
+	constexpr int N = 50'000'000;
 	std::default_random_engine eng(42);
 	std::uniform_real_distribution<float> dist;
 	std::vector<float> input(N);
@@ -100,10 +100,10 @@ int main(int argc, char* argv[]) {
 		// TODO: Set up your submission and submit your command buffer! 
 		vk::CommandBufferAllocateInfo allocateInfo(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
 		auto cmdBuffers = device->allocateCommandBuffersUnique(allocateInfo);
-		vk::MemoryBarrier hostReadMemBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
-		vk::MemoryBarrier shaderRecursionMemBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
-		vk::MemoryBarrier lenUpdateComputeMemBarrier(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
-		vk::MemoryBarrier lenUpdateShaderReadMemBarrier(vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eTransferWrite);
+		vk::MemoryBarrier hostRead(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
+		vk::MemoryBarrier shaderRecursion(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
+		vk::MemoryBarrier lenUpdateWrite(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eShaderRead);
+		vk::MemoryBarrier lenUpdatePreviousRead(vk::AccessFlagBits::eShaderRead, vk::AccessFlagBits::eTransferWrite);
 		cmdBuffers[0]->begin(vk::CommandBufferBeginInfo{});
 		cmdBuffers[0]->bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
 		cmdBuffers[0]->bindDescriptorSets(vk::PipelineBindPoint::eCompute, *layout, 0, *descriptorSet, {});
@@ -111,22 +111,20 @@ int main(int argc, char* argv[]) {
 		// Recursion to reduce in chunks of workGroupSize
 		constexpr uint32_t workGroupSize	= 1024U; // Must be the same as LOCAL_SIZE in shaders/reduce.comp
 		uint32_t elemsToReduce				= N;
-		uint32_t numWorkGroups				= ((elemsToReduce / 2U) / workGroupSize) + 1U;
 		do {
+			uint32_t numWorkGroups = (elemsToReduce / workGroupSize) + 1U;
 			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eTransfer,
-										   {}, lenUpdateShaderReadMemBarrier, {}, {});
+										   {}, lenUpdatePreviousRead, {}, {});
 			cmdBuffers[0]->updateBuffer(arrLenBuff, 0, sizeof(uint32_t), &elemsToReduce);
 			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eComputeShader,
-										   {}, lenUpdateComputeMemBarrier, {}, {});
+										   {}, lenUpdateWrite, {}, {});
 			cmdBuffers[0]->dispatch(numWorkGroups, 1, 1);
 			cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eComputeShader,
-										   {}, shaderRecursionMemBarrier, {}, {});
-			elemsToReduce	= elemsToReduce % 2U == 0U ? elemsToReduce / 2U : (elemsToReduce / 2U) + 1U;
-			numWorkGroups	= (elemsToReduce / workGroupSize) + 1U;
+										   {}, shaderRecursion, {}, {});
+			elemsToReduce = static_cast<uint32_t>(std::ceil(elemsToReduce / workGroupSize));
 		} while (elemsToReduce > 1U);
-		cmdBuffers[0]->dispatch(numWorkGroups, 1, 1);
 
-		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, hostReadMemBarrier, {}, {});
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, hostRead, {}, {});
 		cmdBuffers[0]->end();
 
 		// Time GPU execution
@@ -150,8 +148,7 @@ int main(int argc, char* argv[]) {
 		// Compute single-precision float CPU reference
 		auto beforeCPU = std::chrono::system_clock::now();
 		float input_sum = 0.0f;
-		for (int i = 0; i < N; i++)
-			input_sum += input[i];
+		for (int i = 0; i < N; i++) { input_sum += input[i]; }
 		auto afterCPU = std::chrono::system_clock::now();
 		std::cout << "CPU time: " << std::chrono::duration_cast<std::chrono::milliseconds>(afterCPU - beforeCPU).count() << " ms\n";
 		std::cout << "CPU reduction (float): " << input_sum << std::endl;
