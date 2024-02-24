@@ -10,7 +10,7 @@
 - `07_PointClouderRender`: Point cloud renderer utilising the 'Basic Approach' from [Schütz et al.](https://www.cg.tuwien.ac.at/research/publications/2021/SCHUETZ-2021-PCC/)
 - `08_SharedMemory`: Usage of shared memory to compute the Fibonnaci sequence
 - `09_MatrixMultiplication`: Parallel matrix-matrix multiplication [using shared memory](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#shared-memory)
-- `10_Reduction`: Parallel addition reduction using [the techniques presented by Mark Harris](https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf) (implements the optimisations listed until 'Kernel 4')
+- `10_Reduction`: Parallel addition reduction using [the techniques presented by Mark Harris](https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf) (implements the optimisations listed until 'Kernel 5')
 - `11_StagingBuffer`: Same as `10_Reduction` but using a staging buffer to transfer data to and from the GPU in order to bypass constraints on device local, host visible memory
 
 ## Original README

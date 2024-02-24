@@ -8,6 +8,7 @@
 // suffice to get full points in this task!
 
 #define LOCAL_SIZE 1024 // Threads are organised in LOCAL_SIZE sized blocks
+#define WARP_SIZE 32
 
 shared float arrLocal[LOCAL_SIZE];
 
@@ -19,6 +20,21 @@ layout (std430, set = 0, binding = 1) buffer InputArr {
     float data[];
 } inputArr;
 
+// Unrolling of last 6 iterations of the reduction loop, which are executed within the same warp
+void warpReduce(uint threadId) {
+    arrLocal[threadId] += arrLocal[threadId + 32];
+    memoryBarrierShared();
+    arrLocal[threadId] += arrLocal[threadId + 16];
+    memoryBarrierShared();
+    arrLocal[threadId] += arrLocal[threadId + 8];
+    memoryBarrierShared();
+    arrLocal[threadId] += arrLocal[threadId + 4];
+    memoryBarrierShared();
+    arrLocal[threadId] += arrLocal[threadId + 2];
+    memoryBarrierShared();
+    arrLocal[threadId] += arrLocal[threadId + 1];
+    memoryBarrierShared();
+}
 
 layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
 void main() {
@@ -35,10 +51,11 @@ void main() {
     barrier();
 
     // Perform reduction on all elements covered by this work group
-    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > WARP_SIZE; stride >>= 1) {
         if (threadId < stride) { arrLocal[threadId] += arrLocal[threadId + stride]; }
         barrier();
     }
+    if (threadId < WARP_SIZE) { warpReduce(threadId); }
 
     // Write result for this work group to global memory
     if (threadId == 0) { inputArr.data[gl_WorkGroupID.x] = arrLocal[0]; }
