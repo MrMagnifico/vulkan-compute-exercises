@@ -1,11 +1,45 @@
 #version 450
 
+#extension GL_EXT_debug_printf : require // Require printf support for print statement debugging
+
 // TODO: List all necessary resources and implement reduction of the
 // input array in a shader. Make sure your implementation is as fast
 // as it can be. Using only global or shared memory atomics will not
 // suffice to get full points in this task!
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+#define LOCAL_SIZE 1024 // Threads are organised in LOCAL_SIZE sized blocks
+
+shared float arrLocal[LOCAL_SIZE];
+
+layout (std140, set = 0, binding = 0) uniform ArrLen {
+    uint num;
+} arrLen;
+
+layout (std430, set = 0, binding = 1) buffer InputArr {
+    float data[];
+} inputArr;
+
+
+layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+void main() {
+    // ID of thread within current work group
+    uint threadId = gl_LocalInvocationID.x;
+
+    // Load two elements per thread and perform first iteration of reduction loop
+    // Bound check is conducted on indices and zeroes are placed if threads are addressing indices past length to be operated on
+    uint firstIterFirstElemIdx  = gl_WorkGroupID.x * (gl_WorkGroupSize.x * 2) + threadId;
+    uint firstIterSecondElemIdx = firstIterFirstElemIdx + gl_WorkGroupSize.x;
+    float firstElem             = firstIterFirstElemIdx  < arrLen.num   ? inputArr.data[firstIterFirstElemIdx]  : 0.0;
+    float secondElem            = firstIterSecondElemIdx < arrLen.num   ? inputArr.data[firstIterSecondElemIdx] : 0.0;
+    arrLocal[threadId]          = firstElem + secondElem;
+    barrier();
+
+    // Perform reduction on all elements covered by this work group
+    for (uint stride = gl_WorkGroupSize.x / 2; stride > 0; stride >>= 1) {
+        if (threadId < stride) { arrLocal[threadId] += arrLocal[threadId + stride]; }
+        barrier();
+    }
+
+    // Write result for this work group to global memory
+    if (threadId == 0) { inputArr.data[gl_WorkGroupID.x] = arrLocal[0]; }
 }
