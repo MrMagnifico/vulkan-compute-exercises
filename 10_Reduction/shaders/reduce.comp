@@ -1,11 +1,22 @@
 #version 450
 
+#extension GL_EXT_debug_printf : require // Require printf support for print statement debugging
+
 // TODO: List all necessary resources and implement reduction of the
 // input array in a shader. Make sure your implementation is as fast
 // as it can be. Using only global or shared memory atomics will not
 // suffice to get full points in this task!
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-void main()
-{
+#define LOCAL_SIZE 1024 // Threads are organised in LOCAL_SIZE blocks
+
+shared float arrLocal[LOCAL_SIZE];
+
+layout (std430, set = 0, binding = 0) buffer InputArr {
+    float data[];
+} inputArr;
+
+
+layout(local_size_x = LOCAL_SIZE, local_size_y = 1, local_size_z = 1) in;
+void main() {
+
 }

@@ -7,41 +7,36 @@
 #include <sstream>
 #include <iomanip>
 
-int main(int argc, char* argv[])
-{
-	int N = 20'000'000;
+
+
+int main(int argc, char* argv[]) {
+	// Fill out array to be reduced and compute reference sum
+	constexpr int N = 20'000'000;
 	std::default_random_engine eng(42);
 	std::uniform_real_distribution<float> dist;
 	std::vector<float> input(N);
 	double full_sum = 0.0;
 	std::cout << "Computing reference value..." << std::endl;
-	for (int i = 0; i < N; i++)
-	{
-		input[i] = dist(eng);
-		full_sum += input[i];
+	for (int i = 0; i < N; i++) {
+		input[i] 	= dist(eng);
+		full_sum	+= input[i];
 	}
 	double reference_sum = 0;
-	for (int i = 0; i < N; i++)
-	{
-		input[i] = (float)((input[i] * 42.0) / full_sum);
-		reference_sum += input[i];
+	for (int i = 0; i < N; i++) {
+		input[i] 		= (float)((input[i] * 42.0) / full_sum);
+		reference_sum	+= input[i];
 	}
 	std::cout << "CPU reference (double): " << reference_sum << std::endl;
 
-	try
-	{
+	try {
 		vk::UniqueInstance instance;
 		vk::PhysicalDevice physicalDevice;
 		vk::UniqueDevice device;
 		vk::UniqueCommandPool commandPool;
 		vk::Queue queue;
-
 		Framework::setupBasicCompute("Task 10", VK_API_VERSION_1_3, {}, { VK_EXT_SHADER_ATOMIC_FLOAT_EXTENSION_NAME }, instance, physicalDevice, device, queue, commandPool);
 
-		vk::UniqueShaderModule shaderModule;
-		vk::UniquePipelineLayout layout;
-		vk::UniquePipelineCache cache;
-		vk::UniquePipeline pipeline;
+		VmaAllocator allocator = Framework::createAllocator(*instance, VK_API_VERSION_1_3, physicalDevice, *device);
 
 		// TODO: Set up all necessary resources and prepare them to do a reduction
 		// of the input array as fast as you can manage! Pick the proper resources
@@ -51,12 +46,83 @@ int main(int argc, char* argv[])
 		// TODO: Make sure to copy all the data from the CPU input vector to your
 		// GPU-side buffers, as well as necessary parameters (check the shader source).
 
-		vk::UniqueDescriptorSetLayout descriptorSetLayout;
-		vk::UniqueDescriptorPool descriptorPool;
-		vk::UniqueDescriptorSet descriptorSet;
+		// Create buffer and allocate memory for its storage
+		constexpr size_t buffSize = N * sizeof(float);
+		VkBuffer arrBuff;
+		VkBufferCreateInfo arrBuffCreateInfo = vk::BufferCreateInfo({}, buffSize, vk::BufferUsageFlagBits::eStorageBuffer);
+		VmaAllocationCreateInfo arrBuffAllocInfo = {};
+		arrBuffAllocInfo.usage 			= VMA_MEMORY_USAGE_AUTO;
+		arrBuffAllocInfo.requiredFlags	= VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+		arrBuffAllocInfo.flags 			= VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+		VmaAllocation arrAlloc;
+		vmaCreateBuffer(allocator, &arrBuffCreateInfo, &arrBuffAllocInfo, &arrBuff, &arrAlloc, nullptr);
 
-		Framework::setupComputePipeline("reduce.comp.spv", { *descriptorSetLayout }, * device, shaderModule, layout, cache, pipeline);
+		// Define descriptor pool to provide needed bindings
+		std::vector<vk::DescriptorPoolSize> poolSizes	= {{vk::DescriptorType::eStorageBuffer, 1U}};
+		vk::DescriptorPoolCreateInfo poolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, 1U, poolSizes);
+		vk::UniqueDescriptorPool descriptorPool 		= device->createDescriptorPoolUnique(poolCreateInfo);
+		// Define bindings for needed buffers
+		vk::DescriptorSetLayoutBinding arrBinding(0U, vk::DescriptorType::eStorageBuffer, 1U, vk::ShaderStageFlagBits::eCompute);
+		std::array<vk::DescriptorSetLayoutBinding, 1UL> allBindings	= { arrBinding };
+		vk::DescriptorSetLayoutCreateInfo descLayoutCreateInfo({}, allBindings);
+		vk::UniqueDescriptorSetLayout descriptorSetLayout = device->createDescriptorSetLayoutUnique(descLayoutCreateInfo);
+		// Create descriptor set
+		vk::DescriptorSetAllocateInfo setAllocateInfo(*descriptorPool, *descriptorSetLayout);
+		std::vector<vk::UniqueDescriptorSet> descriptorSets	= device->allocateDescriptorSetsUnique(setAllocateInfo);
+		vk::UniqueDescriptorSet& descriptorSet 				= descriptorSets[0];
+		// Connect bindings in descriptor set to actual buffers
+		vk::DescriptorBufferInfo arrBuffDescriptorInfo(arrBuff, 0UL, VK_WHOLE_SIZE);
+		vk::WriteDescriptorSet arrDescriptorSetWrite(*descriptorSet, 0U, 0U, 1U, vk::DescriptorType::eStorageBuffer, {}, &arrBuffDescriptorInfo);
+		device->updateDescriptorSets({arrDescriptorSetWrite}, {});
 
+		// Transfer array data to GPU memory
+		float* arrMapped;
+		vmaMapMemory(allocator, arrAlloc, (void**) &arrMapped);
+		std::memcpy(arrMapped, input.data(), buffSize);
+		vmaUnmapMemory(allocator, arrAlloc);
+		vmaFlushAllocation(allocator, arrAlloc, 0U, VK_WHOLE_SIZE);
+
+		// Set up compute pipeline
+		vk::UniqueShaderModule shaderModule;
+		vk::UniquePipelineLayout layout;
+		vk::UniquePipelineCache cache;
+		vk::UniquePipeline pipeline;
+		Framework::setupComputePipeline("reduce.comp.spv", { *descriptorSetLayout }, *device, shaderModule, layout, cache, pipeline);
+
+		// Define work group size and number
+		constexpr uint32_t workGroupSize 	= 1024U; // Must be the same as LOCAL_SIZE in shaders/reduce.comp
+		constexpr uint32_t numWorkGroups	= (N / workGroupSize) + 1U;
+
+		// TODO: Set up your submission and submit your command buffer! 
+		vk::CommandBufferAllocateInfo allocateInfo(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
+		auto cmdBuffers = device->allocateCommandBuffersUnique(allocateInfo);
+		vk::MemoryBarrier memoryBarrier(vk::AccessFlagBits::eShaderWrite, vk::AccessFlagBits::eHostRead);
+		cmdBuffers[0]->begin(vk::CommandBufferBeginInfo{});
+		cmdBuffers[0]->bindPipeline(vk::PipelineBindPoint::eCompute, *pipeline);
+		cmdBuffers[0]->bindDescriptorSets(vk::PipelineBindPoint::eCompute, *layout, 0, *descriptorSet, {});
+		cmdBuffers[0]->dispatch(numWorkGroups, 1, 1);
+		cmdBuffers[0]->pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader, vk::PipelineStageFlagBits::eHost, {}, memoryBarrier, {}, {});
+		cmdBuffers[0]->end();
+
+		// Time GPU execution
+		auto beforeGPU = std::chrono::system_clock::now();
+		Framework::initDebugging();
+		Framework::beginCapture();
+		queue.submit(vk::SubmitInfo({}, {}, * cmdBuffers[0]));	// Execute command buffer with optional debugging
+		Framework::endCapture();
+		device->waitIdle();										// Wait until device is idle before proceeding
+		auto afterGPU = std::chrono::system_clock::now();
+		std::cout << "GPU time: " << std::chrono::duration_cast<std::chrono::milliseconds>(afterGPU - beforeGPU).count() << " ms\n";
+
+		// TODO: read back the result of the reduction from the GPU.
+		// Store it in "input_sum_gpu".
+		float input_sum_gpu = 0.0f;
+		vmaMapMemory(allocator, arrAlloc, (void**) &arrMapped);
+		input_sum_gpu = arrMapped[0];
+		vmaUnmapMemory(allocator, arrAlloc);
+		std::cout << "GPU reduction (float): " << input_sum_gpu << std::endl;
+
+		// Compute single-precision float CPU reference
 		auto beforeCPU = std::chrono::system_clock::now();
 		float input_sum = 0.0f;
 		for (int i = 0; i < N; i++)
@@ -65,35 +131,13 @@ int main(int argc, char* argv[])
 		std::cout << "CPU time: " << std::chrono::duration_cast<std::chrono::milliseconds>(afterCPU - beforeCPU).count() << " ms\n";
 		std::cout << "CPU reduction (float): " << input_sum << std::endl;
 
-		auto beforeGPU = std::chrono::system_clock::now();
-
-		// TODO: Set up your submission and submit your command buffer! 
-
-		vk::CommandBufferAllocateInfo allocateInfo(*commandPool, vk::CommandBufferLevel::ePrimary, 1);
-		auto cmdBuffers = device->allocateCommandBuffersUnique(allocateInfo);
-
-		Framework::initDebugging();
-		Framework::beginCapture();
-		queue.submit(vk::SubmitInfo({}, {}, *cmdBuffers[0]));
-		Framework::endCapture();
-
-		device->waitIdle();
-
-		// TODO: read back the result of the reduction from the GPU.
-		// Store it in "input_sum_gpu".
-
-		float input_sum_gpu = 0;
-
-		auto afterGPU = std::chrono::system_clock::now();
-		std::cout << "GPU time: " << std::chrono::duration_cast<std::chrono::milliseconds>(afterGPU - beforeGPU).count() << " ms\n";
-		std::cout << "GPU reduction (float): " << input_sum_gpu << std::endl;
+		// Free allocated resources
+		vmaDestroyBuffer(allocator, arrBuff, arrAlloc);
+		vmaDestroyAllocator(allocator);
 	}
-	catch (Framework::NotImplemented e)
-	{
-		std::cerr << e.what() << std::endl;
-	}
+	catch (Framework::NotImplemented e) { std::cerr << e.what() << std::endl; }
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 /*
